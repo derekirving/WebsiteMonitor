@@ -1,0 +1,639 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
+using System.Net.Http;
+using System.Net.Mail;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace WebsiteMonitor
+{
+    public class WebsiteInfo
+    {
+        public string Url { get; set; }
+        public bool IsOnline { get; set; } = true;
+        public DateTime LastCheck { get; set; }
+        public string LastError { get; set; }
+    }
+
+    public class EmailSettings
+    {
+        public bool Enabled { get; set; }
+        public string SmtpServer { get; set; } = "smtp.gmail.com";
+        public int SmtpPort { get; set; } = 587;
+        public string Username { get; set; }
+        public string Password { get; set; }
+        public string ToEmail { get; set; }
+        public string FromEmail { get; set; }
+    }
+
+    public class MonitorApp : ApplicationContext
+    {
+        private NotifyIcon trayIcon;
+        private System.Threading.Timer pingTimer;
+        private HttpClient httpClient;
+        private List<WebsiteInfo> websites;
+        private int pingIntervalSeconds = 60;
+        private EmailSettings emailSettings;
+        private SemaphoreSlim emailSemaphore = new SemaphoreSlim(1, 1);
+
+        public MonitorApp()
+        {
+            // Initialize
+            httpClient = new HttpClient();
+            httpClient.Timeout = TimeSpan.FromSeconds(10);
+            
+            websites = new List<WebsiteInfo>
+            {
+                new WebsiteInfo { Url = "https://example.com" }
+            };
+
+            emailSettings = new EmailSettings();
+
+            // Create tray icon
+            trayIcon = new NotifyIcon()
+            {
+                Icon = SystemIcons.Application,
+                ContextMenuStrip = CreateContextMenu(),
+                Visible = true,
+                Text = "Website Monitor"
+            };
+
+            trayIcon.DoubleClick += OnTrayIconDoubleClick;
+
+            // Start monitoring
+            StartMonitoring();
+        }
+
+        private ContextMenuStrip CreateContextMenu()
+        {
+            var menu = new ContextMenuStrip();
+            
+            var statusItem = new ToolStripMenuItem($"Monitoring {websites.Count} website(s)");
+            statusItem.Enabled = false;
+            menu.Items.Add(statusItem);
+            
+            menu.Items.Add(new ToolStripSeparator());
+
+            // Add status for each website
+            foreach (var site in websites)
+            {
+                var siteItem = new ToolStripMenuItem($"{(site.IsOnline ? "✓" : "✗")} {site.Url}");
+                siteItem.Enabled = false;
+                menu.Items.Add(siteItem);
+            }
+            
+            menu.Items.Add(new ToolStripSeparator());
+            
+            var checkNowItem = new ToolStripMenuItem("Check All Now");
+            checkNowItem.Click += async (s, e) => await CheckAllWebsites();
+            menu.Items.Add(checkNowItem);
+            
+            var websitesItem = new ToolStripMenuItem("Manage Websites");
+            websitesItem.Click += OnManageWebsites;
+            menu.Items.Add(websitesItem);
+            
+            var emailItem = new ToolStripMenuItem("Email Settings");
+            emailItem.Click += OnEmailSettings;
+            menu.Items.Add(emailItem);
+
+            var settingsItem = new ToolStripMenuItem("Settings");
+            settingsItem.Click += OnSettings;
+            menu.Items.Add(settingsItem);
+            
+            menu.Items.Add(new ToolStripSeparator());
+            
+            var exitItem = new ToolStripMenuItem("Exit");
+            exitItem.Click += OnExit;
+            menu.Items.Add(exitItem);
+
+            return menu;
+        }
+
+        private void RefreshContextMenu()
+        {
+            trayIcon.ContextMenuStrip.Dispose();
+            trayIcon.ContextMenuStrip = CreateContextMenu();
+        }
+
+        private void StartMonitoring()
+        {
+            // Check immediately on start
+            Task.Run(async () => await CheckAllWebsites());
+
+            // Set up periodic checks
+            pingTimer?.Dispose();
+            pingTimer = new System.Threading.Timer(
+                async _ => await CheckAllWebsites(),
+                null,
+                TimeSpan.FromSeconds(pingIntervalSeconds),
+                TimeSpan.FromSeconds(pingIntervalSeconds)
+            );
+        }
+
+        private async Task CheckAllWebsites()
+        {
+            var tasks = websites.Select(site => CheckWebsite(site)).ToList();
+            await Task.WhenAll(tasks);
+            
+            // Update tray icon
+            UpdateTrayIcon();
+            RefreshContextMenu();
+        }
+
+        private async Task CheckWebsite(WebsiteInfo site)
+        {
+            bool previousStatus = site.IsOnline;
+            
+            try
+            {
+                var response = await httpClient.GetAsync(site.Url);
+                site.LastCheck = DateTime.Now;
+                
+                if (response.IsSuccessStatusCode)
+                {
+                    site.IsOnline = true;
+                    site.LastError = null;
+                    
+                    // Website came back online
+                    if (!previousStatus)
+                    {
+                        string message = $"{site.Url} is back online";
+                        ShowNotification("Website Restored", message, ToolTipIcon.Info);
+                        await SendEmailAlert($"Website Back Online: {site.Url}", message);
+                    }
+                }
+                else
+                {
+                    HandleWebsiteFailure(site, previousStatus, 
+                        $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}");
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                HandleWebsiteFailure(site, previousStatus, $"Connection error: {ex.Message}");
+            }
+            catch (TaskCanceledException)
+            {
+                HandleWebsiteFailure(site, previousStatus, "Request timed out");
+            }
+            catch (Exception ex)
+            {
+                HandleWebsiteFailure(site, previousStatus, $"Error: {ex.Message}");
+            }
+        }
+
+        private void HandleWebsiteFailure(WebsiteInfo site, bool previousStatus, string reason)
+        {
+            site.IsOnline = false;
+            site.LastError = reason;
+            site.LastCheck = DateTime.Now;
+            
+            // Only alert on status change
+            if (previousStatus)
+            {
+                string message = $"{site.Url}\n{reason}";
+                ShowNotification("Website Down!", message, ToolTipIcon.Error);
+                Task.Run(async () => await SendEmailAlert($"Website Down: {site.Url}", message));
+            }
+        }
+
+        private async Task SendEmailAlert(string subject, string body)
+        {
+            if (!emailSettings.Enabled || string.IsNullOrWhiteSpace(emailSettings.ToEmail))
+                return;
+
+            await emailSemaphore.WaitAsync();
+            try
+            {
+                using (var smtpClient = new SmtpClient(emailSettings.SmtpServer, emailSettings.SmtpPort))
+                {
+                    smtpClient.EnableSsl = true;
+                    smtpClient.Credentials = new System.Net.NetworkCredential(
+                        emailSettings.Username, 
+                        emailSettings.Password
+                    );
+
+                    var mailMessage = new MailMessage
+                    {
+                        From = new MailAddress(emailSettings.FromEmail ?? emailSettings.Username),
+                        Subject = subject,
+                        Body = $"{body}\n\nTime: {DateTime.Now}",
+                        IsBodyHtml = false
+                    };
+                    mailMessage.To.Add(emailSettings.ToEmail);
+
+                    await smtpClient.SendMailAsync(mailMessage);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log email failure but don't crash the app
+                Console.WriteLine($"Failed to send email: {ex.Message}");
+            }
+            finally
+            {
+                emailSemaphore.Release();
+            }
+        }
+
+        private void ShowNotification(string title, string message, ToolTipIcon icon)
+        {
+            trayIcon.BalloonTipTitle = title;
+            trayIcon.BalloonTipText = message;
+            trayIcon.BalloonTipIcon = icon;
+            trayIcon.ShowBalloonTip(5000);
+        }
+
+        private void UpdateTrayIcon()
+        {
+            int onlineCount = websites.Count(w => w.IsOnline);
+            int totalCount = websites.Count;
+            
+            string status = onlineCount == totalCount 
+                ? "All Online" 
+                : $"{totalCount - onlineCount} Down";
+            
+            trayIcon.Text = $"Website Monitor - {status}\n{onlineCount}/{totalCount} online";
+        }
+
+        private void OnTrayIconDoubleClick(object sender, EventArgs e)
+        {
+            int onlineCount = websites.Count(w => w.IsOnline);
+            ShowNotification("Website Monitor", 
+                $"Monitoring {websites.Count} websites\n{onlineCount} online, {websites.Count - onlineCount} offline", 
+                ToolTipIcon.Info);
+        }
+
+        private void OnManageWebsites(object sender, EventArgs e)
+        {
+            using (var websitesForm = new ManageWebsitesForm(websites))
+            {
+                if (websitesForm.ShowDialog() == DialogResult.OK)
+                {
+                    websites = websitesForm.Websites;
+                    RefreshContextMenu();
+                    Task.Run(async () => await CheckAllWebsites());
+                }
+            }
+        }
+
+        private void OnEmailSettings(object sender, EventArgs e)
+        {
+            using (var emailForm = new EmailSettingsForm(emailSettings))
+            {
+                if (emailForm.ShowDialog() == DialogResult.OK)
+                {
+                    emailSettings = emailForm.Settings;
+                }
+            }
+        }
+
+        private void OnSettings(object sender, EventArgs e)
+        {
+            using (var settingsForm = new SettingsForm(pingIntervalSeconds))
+            {
+                if (settingsForm.ShowDialog() == DialogResult.OK)
+                {
+                    pingIntervalSeconds = settingsForm.IntervalSeconds;
+                    StartMonitoring();
+                }
+            }
+        }
+
+        private void OnExit(object sender, EventArgs e)
+        {
+            pingTimer?.Dispose();
+            httpClient?.Dispose();
+            trayIcon.Visible = false;
+            trayIcon.Dispose();
+            Application.Exit();
+        }
+    }
+
+    public class ManageWebsitesForm : Form
+    {
+        private ListBox websiteListBox;
+        private TextBox urlTextBox;
+        public List<WebsiteInfo> Websites { get; private set; }
+
+        public ManageWebsitesForm(List<WebsiteInfo> currentWebsites)
+        {
+            Websites = new List<WebsiteInfo>(currentWebsites);
+            
+            Text = "Manage Websites";
+            Size = new Size(500, 400);
+            StartPosition = FormStartPosition.CenterScreen;
+
+            var label = new Label
+            {
+                Text = "Monitored Websites:",
+                Location = new Point(20, 20),
+                AutoSize = true
+            };
+
+            websiteListBox = new ListBox
+            {
+                Location = new Point(20, 45),
+                Size = new Size(440, 200)
+            };
+            RefreshList();
+
+            var urlLabel = new Label
+            {
+                Text = "Website URL:",
+                Location = new Point(20, 260),
+                AutoSize = true
+            };
+
+            urlTextBox = new TextBox
+            {
+                Location = new Point(20, 285),
+                Width = 340,
+                PlaceholderText = "https://example.com"
+            };
+
+            var addButton = new Button
+            {
+                Text = "Add",
+                Location = new Point(370, 283),
+                Width = 90
+            };
+            addButton.Click += OnAdd;
+
+            var removeButton = new Button
+            {
+                Text = "Remove",
+                Location = new Point(370, 315),
+                Width = 90
+            };
+            removeButton.Click += OnRemove;
+
+            var okButton = new Button
+            {
+                Text = "OK",
+                DialogResult = DialogResult.OK,
+                Location = new Point(295, 325),
+                Width = 75
+            };
+
+            var cancelButton = new Button
+            {
+                Text = "Cancel",
+                DialogResult = DialogResult.Cancel,
+                Location = new Point(385, 325),
+                Width = 75
+            };
+
+            Controls.AddRange(new Control[] { 
+                label, websiteListBox, urlLabel, urlTextBox, 
+                addButton, removeButton, okButton, cancelButton 
+            });
+
+            AcceptButton = okButton;
+            CancelButton = cancelButton;
+        }
+
+        private void RefreshList()
+        {
+            websiteListBox.Items.Clear();
+            foreach (var site in Websites)
+            {
+                websiteListBox.Items.Add(site.Url);
+            }
+        }
+
+        private void OnAdd(object sender, EventArgs e)
+        {
+            string url = urlTextBox.Text.Trim();
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                if (!url.StartsWith("http://") && !url.StartsWith("https://"))
+                {
+                    url = "https://" + url;
+                }
+                
+                Websites.Add(new WebsiteInfo { Url = url });
+                RefreshList();
+                urlTextBox.Clear();
+            }
+        }
+
+        private void OnRemove(object sender, EventArgs e)
+        {
+            if (websiteListBox.SelectedIndex >= 0)
+            {
+                Websites.RemoveAt(websiteListBox.SelectedIndex);
+                RefreshList();
+            }
+        }
+    }
+
+    public class EmailSettingsForm : Form
+    {
+        private CheckBox enabledCheckBox;
+        private TextBox smtpServerTextBox;
+        private NumericUpDown portNumeric;
+        private TextBox usernameTextBox;
+        private TextBox passwordTextBox;
+        private TextBox fromEmailTextBox;
+        private TextBox toEmailTextBox;
+        public EmailSettings Settings { get; private set; }
+
+        public EmailSettingsForm(EmailSettings currentSettings)
+        {
+            Settings = new EmailSettings
+            {
+                Enabled = currentSettings.Enabled,
+                SmtpServer = currentSettings.SmtpServer,
+                SmtpPort = currentSettings.SmtpPort,
+                Username = currentSettings.Username,
+                Password = currentSettings.Password,
+                FromEmail = currentSettings.FromEmail,
+                ToEmail = currentSettings.ToEmail
+            };
+
+            Text = "Email Alert Settings";
+            Size = new Size(450, 380);
+            StartPosition = FormStartPosition.CenterScreen;
+
+            int y = 20;
+
+            enabledCheckBox = new CheckBox
+            {
+                Text = "Enable Email Alerts",
+                Location = new Point(20, y),
+                Width = 200,
+                Checked = Settings.Enabled
+            };
+            y += 35;
+
+            AddLabelAndTextBox("SMTP Server:", ref smtpServerTextBox, Settings.SmtpServer, ref y);
+            
+            var portLabel = new Label
+            {
+                Text = "SMTP Port:",
+                Location = new Point(20, y),
+                AutoSize = true
+            };
+            portNumeric = new NumericUpDown
+            {
+                Value = Settings.SmtpPort,
+                Minimum = 1,
+                Maximum = 65535,
+                Location = new Point(20, y + 20),
+                Width = 100
+            };
+            y += 55;
+
+            AddLabelAndTextBox("Username:", ref usernameTextBox, Settings.Username, ref y);
+            
+            var passwordLabel = new Label
+            {
+                Text = "Password:",
+                Location = new Point(20, y),
+                AutoSize = true
+            };
+            passwordTextBox = new TextBox
+            {
+                Text = Settings.Password,
+                Location = new Point(20, y + 20),
+                Width = 390,
+                UseSystemPasswordChar = true
+            };
+            y += 55;
+
+            AddLabelAndTextBox("From Email:", ref fromEmailTextBox, Settings.FromEmail, ref y);
+            AddLabelAndTextBox("To Email:", ref toEmailTextBox, Settings.ToEmail, ref y);
+
+            var okButton = new Button
+            {
+                Text = "OK",
+                DialogResult = DialogResult.OK,
+                Location = new Point(245, y + 10),
+                Width = 75
+            };
+
+            var cancelButton = new Button
+            {
+                Text = "Cancel",
+                DialogResult = DialogResult.Cancel,
+                Location = new Point(335, y + 10),
+                Width = 75
+            };
+
+            okButton.Click += (s, e) =>
+            {
+                Settings.Enabled = enabledCheckBox.Checked;
+                Settings.SmtpServer = smtpServerTextBox.Text;
+                Settings.SmtpPort = (int)portNumeric.Value;
+                Settings.Username = usernameTextBox.Text;
+                Settings.Password = passwordTextBox.Text;
+                Settings.FromEmail = fromEmailTextBox.Text;
+                Settings.ToEmail = toEmailTextBox.Text;
+            };
+
+            Controls.AddRange(new Control[] { 
+                enabledCheckBox, portLabel, portNumeric,
+                passwordLabel, passwordTextBox,
+                okButton, cancelButton 
+            });
+
+            AcceptButton = okButton;
+            CancelButton = cancelButton;
+        }
+
+        private void AddLabelAndTextBox(string labelText, ref TextBox textBox, string value, ref int y)
+        {
+            var label = new Label
+            {
+                Text = labelText,
+                Location = new Point(20, y),
+                AutoSize = true
+            };
+            textBox = new TextBox
+            {
+                Text = value,
+                Location = new Point(20, y + 20),
+                Width = 390
+            };
+            Controls.Add(label);
+            Controls.Add(textBox);
+            y += 55;
+        }
+    }
+
+    public class SettingsForm : Form
+    {
+        private NumericUpDown intervalNumeric;
+        public int IntervalSeconds { get; private set; }
+
+        public SettingsForm(int currentInterval)
+        {
+            Text = "Settings";
+            Size = new Size(350, 180);
+            StartPosition = FormStartPosition.CenterScreen;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+
+            var intervalLabel = new Label
+            {
+                Text = "Check interval (seconds):",
+                Location = new Point(20, 20),
+                AutoSize = true
+            };
+
+            intervalNumeric = new NumericUpDown
+            {
+                Value = currentInterval,
+                Minimum = 10,
+                Maximum = 3600,
+                Location = new Point(20, 45),
+                Width = 100
+            };
+
+            var okButton = new Button
+            {
+                Text = "OK",
+                DialogResult = DialogResult.OK,
+                Location = new Point(165, 100),
+                Width = 75
+            };
+
+            var cancelButton = new Button
+            {
+                Text = "Cancel",
+                DialogResult = DialogResult.Cancel,
+                Location = new Point(250, 100),
+                Width = 75
+            };
+
+            okButton.Click += (s, e) =>
+            {
+                IntervalSeconds = (int)intervalNumeric.Value;
+            };
+
+            Controls.AddRange(new Control[] { 
+                intervalLabel, intervalNumeric, 
+                okButton, cancelButton 
+            });
+
+            AcceptButton = okButton;
+            CancelButton = cancelButton;
+        }
+    }
+
+    static class Program
+    {
+        [STAThread]
+        static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new MonitorApp());
+        }
+    }
+}

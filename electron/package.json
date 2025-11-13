@@ -1,0 +1,42 @@
+{
+  "name": "website-monitor",
+  "version": "1.0.0",
+  "description": "Cross-platform website monitoring app with system tray",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build-win": "electron-builder --windows",
+    "build-mac": "electron-builder --mac",
+    "build-linux": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.yourcompany.websitemonitor",
+    "productName": "Website Monitor",
+    "win": {
+      "target": "nsis",
+      "icon": "icon.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "icon.png",
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "icon.png",
+      "category": "Utility"
+    }
+  },
+  "keywords": [
+    "electron",
+    "monitor",
+    "website",
+    "tray"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^39.1.2",
+    "electron-builder": "^26.0.12"
+  }
+}
