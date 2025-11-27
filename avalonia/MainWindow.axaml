@@ -1,0 +1,49 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:WebsiteMonitor"
+        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
+        x:Class="WebsiteMonitor.MainWindow"
+        x:DataType="local:MainWindow"
+        Title="Website Monitor"
+        Width="600" Height="400"
+        Icon="/Assets/avalonia-logo.ico">
+    
+    <Grid RowDefinitions="Auto,*" Margin="10">
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Spacing="10" Margin="0,0,0,10">
+            <TextBlock Text="Website Monitor" FontSize="20" FontWeight="Bold"/>
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <TextBox x:Name="UrlTextBox" Width="400" Watermark="Enter website URL (e.g., https://example.com)"/>
+                <Button x:Name="AddButton" Content="Add Website" Click="AddButton_Click"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Website List -->
+        <Border Grid.Row="1" BorderBrush="Gray" BorderThickness="1" CornerRadius="5">
+            <DataGrid x:Name="WebsiteDataGrid"
+                      IsReadOnly="True"
+                      GridLinesVisibility="All"
+                      BorderThickness="0"
+                      x:DataType="local:WebsiteStatus">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="URL" Binding="{Binding Url}" Width="*"/>
+                    <DataGridTextColumn Header="Status" Binding="{Binding StatusText}" Width="Auto"/>
+                    <DataGridTextColumn Header="Code" Binding="{Binding StatusCode}" Width="Auto"/>
+                    <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="Auto"/>
+                    <DataGridTextColumn Header="Last Checked" Binding="{Binding LastCheckedText}" Width="Auto"/>
+                    <DataGridTemplateColumn Header="Action" Width="Auto">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate x:DataType="local:WebsiteStatus">
+                                <Button Content="Remove" 
+                                        Click="RemoveButton_Click"
+                                        Tag="{Binding}"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+        </Border>
+    </Grid>
+</Window>
