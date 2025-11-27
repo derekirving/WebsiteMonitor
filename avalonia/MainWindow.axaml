@@ -23,7 +23,7 @@
         <!-- Website List -->
         <Border Grid.Row="1" BorderBrush="Gray" BorderThickness="1" CornerRadius="5">
             <DataGrid x:Name="WebsiteDataGrid"
-                      IsReadOnly="True"
+                      IsReadOnly="False"
                       GridLinesVisibility="All"
                       BorderThickness="0"
                       x:DataType="local:WebsiteStatus">
