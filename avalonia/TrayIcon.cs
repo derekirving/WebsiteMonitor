@@ -2,6 +2,8 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using System;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 
 namespace WebsiteMonitor;
@@ -18,6 +20,12 @@ public class TrayIcon
         _monitorService = new MonitorService();
         
         _trayIcon = new Avalonia.Controls.TrayIcon();
+
+        var icon = new WindowIcon(
+            new Bitmap(AssetLoader.Open(
+                new Uri("avares://WebsiteMonitor/Assets/avalonia-logo.ico"))));
+        
+        _trayIcon.Icon = icon;
         _trayIcon.ToolTipText = "Website Monitor - All systems operational";
         
         var menu = new NativeMenu();
