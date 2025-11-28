@@ -2,7 +2,13 @@
 
 Experimental tool for monitoring web site availability.
 
+UI requirements were a desktop app that could be minimised to the tray and support native OS notifications.
+
 ## Build and run
+
+For Electron and AvaloniaUI, Install **Node.js** from https://nodejs.org/
+
+For Tauri, Install **Node.js** from https://nodejs.org/ and on Windows, download the **Build Tools for Visual Studio 2022**: https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022.
 
 ### Electron
 
@@ -28,6 +34,14 @@ dotnet restore
 dotnet run
 ```
 
+### Tauri
+
+```bash
+cd tauri
+npm ci
+npm run tauri dev
+```
+
 ## Resource Usage
 
 | Technology | Cross Platform | Memory usage |
@@ -35,5 +49,6 @@ dotnet run
 | Electron | Yes | **128MB** |
 | AvaloniaUI | Yes | **52MB** |
 | WinForms | No | **16MB** |
+| Tauri | Yes | **4MB** |
 
-So WinForms is the clear winner for a Windows only solution.
+So Tauri is the clear winner. You just need to learn [rust](https://rust-lang.org/)!
