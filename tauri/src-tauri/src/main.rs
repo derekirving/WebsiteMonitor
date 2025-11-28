@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    testapp_lib::run()
+    website_monitor_lib::run()
 }
