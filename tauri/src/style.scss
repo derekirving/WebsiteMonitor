@@ -1,2 +1,10 @@
-@import "./libs/original/styles.scss";
+//@import "./libs/original/styles.scss";
 // @import "./libs/bootstrap/styles.scss";
+@import "@picocss/pico/scss/pico";
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: 0.75s;
+}
