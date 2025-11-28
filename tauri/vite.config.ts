@@ -27,4 +27,16 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  css: {
+    preprocessorOptions: {
+      scss: {
+        silenceDeprecations: [
+          'import',
+          'color-functions',
+          'global-builtin',
+          'legacy-js-api',
+        ],
+      },
+    },
+  }
 }));
