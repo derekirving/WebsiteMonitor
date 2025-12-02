@@ -3,7 +3,16 @@
 ## Setup
 
 Install **Rust** from https://rustup.rs/
+
 Install **Node.js** from https://nodejs.org/
+
+For authentication, create a new registration on Azure.
+
+1. Choose *Public client/native (mobile & desktop)* and set the *Redirect URI* as `http://localhost`.
+
+2. In the **Authentication** tab under **Settings** ensure that **Allow public client flows** is enabled.
+
+Make a note of the Client ID as it's required in [main.ts](./src/main.ts#L10).
 
 ### Windows
 

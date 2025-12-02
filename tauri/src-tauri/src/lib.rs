@@ -12,6 +12,8 @@ use tauri::{
 use tokio::time::{interval, Duration};
 use tauri_plugin_notification::NotificationExt;
 
+mod auth;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Website {
     url: String,
@@ -26,11 +28,50 @@ struct AppState {
 }
 
 #[tauri::command]
+async fn login(
+    client_id: String,
+    tenant_id: String,
+) -> Result<auth::TokenResponse, String> {
+
+    println!("Logging in: {}", client_id);
+    let (code_verifier, code_challenge) = auth::generate_pkce();
+    let (redirect_uri, rx) = auth::start_auth_server();
+
+    let auth_url = format!(
+        "https://login.microsoftonline.com/{}/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope=User.Read%20openid%20profile%20offline_access&code_challenge={}&code_challenge_method=S256",
+        tenant_id, client_id, 
+        urlencoding::encode(&redirect_uri),
+        code_challenge
+    );
+
+    println!("Auth Url {}", auth_url);
+
+    webbrowser::open(&auth_url).map_err(|e| e.to_string())?;
+
+    // Wait for callback
+    let code = rx.recv_timeout(std::time::Duration::from_secs(300))
+        .map_err(|_| "Authentication timeout")?;
+
+    // Exchange code for token
+    let token = auth::exchange_code_for_token(
+        &code,
+        &code_verifier,
+        &redirect_uri,
+        &client_id,
+        &tenant_id,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(token)
+}
+
+#[tauri::command]
 fn greet(name: &str, app_handle: AppHandle) -> String {
     let _ = app_handle
         .notification()
         .builder()
-        .title("Hello!")
+        .title("Website Monitor")
         .body(format!("{} has been greeted", name))
         .show();
 
@@ -221,8 +262,7 @@ pub fn run() {
                 state.tray.set_menu(Some(menu)).unwrap();
             }
         })
-        .invoke_handler(tauri::generate_handler![greet])
-        .invoke_handler(tauri::generate_handler![greet, check_websites])
+        .invoke_handler(tauri::generate_handler![login, greet, check_websites])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

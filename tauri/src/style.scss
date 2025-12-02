@@ -8,3 +8,29 @@
   will-change: filter;
   transition: 0.75s;
 }
+
+button:hover {
+  background: #006cbe;
+}
+
+button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.status {
+  margin-top: 20px;
+  padding: 16px;
+  border-radius: 4px;
+  background: #f0f0f0;
+}
+
+.error {
+  background: #fde7e9;
+  color: #d13438;
+}
+
+.success {
+  background: #dff6dd;
+  color: #107c10;
+}
