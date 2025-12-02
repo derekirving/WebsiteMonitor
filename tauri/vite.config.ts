@@ -12,8 +12,13 @@ export default defineConfig(async () => ({
   clearScreen: false,
   root: path.join(__dirname, "src"),
   build: {
+    // rollupOptions: {
+    //   input: glob.sync(path.resolve(__dirname, "src", "*.html")),
+    // },
     rollupOptions: {
-      input: glob.sync(path.resolve(__dirname, "src", "*.html")),
+      input: {
+        main: path.resolve(__dirname, 'src', 'index.html'),
+      },
     },
     outDir: path.join(__dirname, "dist"),
     //emptyOutDir: true,

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { login as loginHelper, fetchProtected, logout as logoutHelper, setCurrentUser, currentUser } from './helpers/auth';
 
 let greetInputEl: HTMLInputElement | null;
 let greetMsgEl: HTMLElement | null;
@@ -12,31 +13,60 @@ const CONFIG = {
     apiBaseUrl: 'https://your-api.azurewebsites.net/api'
 };
 
-let accessToken = null;
+// accessToken is stored in Rust keyring; frontend uses getAccessToken/fetchProtected
 
 let loginBtn: HTMLButtonElement = document.getElementById('loginBtn') as HTMLButtonElement;
+let logoutBtn: HTMLButtonElement | null = document.getElementById('logoutBtn') as HTMLButtonElement | null;
+let apiBtn: HTMLButtonElement | null = document.getElementById('apiBtn') as HTMLButtonElement | null;
 //const apiBtn = document.getElementById('apiBtn');
 //const statusDiv = document.getElementById('status');
 
 loginBtn.addEventListener('click', async () => {
     loginBtn.disabled = true;
     showStatus('Signing in...', false);
-    
     try {
-        const result: any = await invoke('login', {
-            clientId: CONFIG.clientId,
-            tenantId: CONFIG.tenantId
-        });
-        
-        accessToken = result.access_token;
+        const result: any = await loginHelper(CONFIG.clientId, CONFIG.tenantId);
+        console.log('login result', result);
+        // If your Rust login returns token including id_token, you may want to parse preferred_username there.
+        // For now assume Rust saved the token and you can derive the user from the token in Rust.
+        // Store a placeholder or actual user if returned by `login`
+        if (result && result.id_token) {
+            // Optionally send a command to get the user; here we just set currentUser to unknown
+            setCurrentUser('unknown');
+        }
         showStatus('✅ Signed in successfully!', true);
         loginBtn.style.display = 'none';
-        //apiBtn.style.display = 'inline-block';
-        
-        console.log('Token expires in:', result.expires_in, 'seconds');
+        if (logoutBtn) logoutBtn.style.display = 'inline-block';
     } catch (error) {
         showStatus('❌ Sign in failed: ' + error, false, true);
         loginBtn.disabled = false;
+    }
+});
+
+logoutBtn?.addEventListener('click', async () => {
+    const u = currentUser();
+    if (!u) return;
+    try {
+        await logoutHelper(u);
+        showStatus('Logged out', true);
+        if (loginBtn) loginBtn.style.display = 'inline-block';
+        if (logoutBtn) logoutBtn.style.display = 'none';
+    } catch (e) {
+        console.error('logout failed', e);
+    }
+});
+
+apiBtn?.addEventListener('click', async () => {
+    const u = currentUser();
+    if (!u) {
+        console.warn('no user');
+        return;
+    }
+    try {
+        const body = await fetchProtected(CONFIG.apiBaseUrl + '/protected', u, CONFIG.clientId, CONFIG.tenantId);
+        console.log('protected response', body);
+    } catch (e) {
+        console.error('protected call failed', e);
     }
 });
 

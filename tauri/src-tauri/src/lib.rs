@@ -3,6 +3,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use tokio::sync::watch;
 use tauri::{
     async_runtime,
     menu::{Menu, MenuItem},
@@ -11,6 +12,7 @@ use tauri::{
 };
 use tokio::time::{interval, Duration};
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_keyring::KeyringExt;
 
 mod auth;
 
@@ -25,12 +27,14 @@ struct Website {
 struct AppState {
     websites: Mutex<Vec<Website>>,
     tray: TrayIcon,
+    refresher_tx: Mutex<Option<watch::Sender<bool>>>,
 }
 
 #[tauri::command]
 async fn login(
     client_id: String,
     tenant_id: String,
+    app_handle: AppHandle
 ) -> Result<auth::TokenResponse, String> {
 
     println!("Logging in: {}", client_id);
@@ -53,17 +57,84 @@ async fn login(
         .map_err(|_| "Authentication timeout")?;
 
     // Exchange code for token
+    let app_handle_clone = app_handle.clone();
     let token = auth::exchange_code_for_token(
         &code,
         &code_verifier,
         &redirect_uri,
         &client_id,
         &tenant_id,
+        &app_handle_clone
     )
     .await
     .map_err(|e| e.to_string())?;
 
+    // After successful login persist token and start a background refresher
+    let user = auth::extract_user_from_id_token_or_os(&token).unwrap_or_else(|_| "unknown".to_string());
+    let ah = app_handle.clone();
+    let client_id_clone = client_id.clone();
+    let tenant_id_clone = tenant_id.clone();
+
+    // Create a watch channel to allow cancelling the refresher
+    let (tx, mut rx) = watch::channel(false);
+    // store sender in app state so logout can cancel
+    let state = app_handle.state::<AppState>();
+    *state.refresher_tx.lock().unwrap() = Some(tx.clone());
+
+    async_runtime::spawn(async move {
+        // initial attempt to compute sleep until expiry
+        loop {
+            // Try to load stored token and compute sleep until expiry
+            if let Ok(Some(stored)) = auth::load_token_from_keyring(&ah, &user) {
+                let expires_at = stored.issued_at + stored.token.expires_in;
+                let now = Utc::now().timestamp();
+                // sleep until 60 seconds before expiry, or at most 5 minutes
+                let sleep_secs = if expires_at > now + 60 {
+                    (expires_at - now - 60) as u64
+                } else {
+                    300u64
+                };
+                // wait either for cancel or timeout
+                let sleep = tokio::time::sleep(Duration::from_secs(sleep_secs));
+                tokio::select! {
+                    _ = rx.changed() => {
+                        // cancelled when value becomes true
+                        if *rx.borrow() {
+                            break;
+                        }
+                    }
+                    _ = sleep => {
+                        let _ = auth::ensure_valid_token(ah.clone(), &user, &client_id_clone, &tenant_id_clone, 60).await;
+                        // loop and recompute next sleep
+                    }
+                }
+            } else {
+                // no token stored yet; wait a short while before retrying
+                let sleep = tokio::time::sleep(Duration::from_secs(60));
+                tokio::select! {
+                    _ = rx.changed() => {
+                        if *rx.borrow() { break; }
+                    }
+                    _ = sleep => continue,
+                }
+            }
+        }
+    });
+
     Ok(token)
+}
+
+#[tauri::command]
+async fn get_access_token(
+    user: String,
+    client_id: String,
+    tenant_id: String,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    match auth::ensure_valid_token(app_handle.clone(), &user, &client_id, &tenant_id, 60).await {
+        Ok(token_resp) => Ok(token_resp.access_token),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -91,6 +162,43 @@ async fn check_websites(
         }
         Err(e) => Err(e),
     }
+}
+
+#[tauri::command]
+async fn fetch_protected(
+    api_url: String,
+    user: String,
+    client_id: String,
+    tenant_id: String,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    // try once, on 401 refresh and retry once
+    let access = auth::ensure_valid_token(app_handle.clone(), &user, &client_id, &tenant_id, 60).await.map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
+    let res = client.get(&api_url).bearer_auth(&access.access_token).send().await.map_err(|e| e.to_string())?;
+    if res.status() == 401 {
+        // force refresh and retry
+        let refreshed = auth::ensure_valid_token(app_handle.clone(), &user, &client_id, &tenant_id, 0).await.map_err(|e| e.to_string())?;
+        let res2 = client.get(&api_url).bearer_auth(&refreshed.access_token).send().await.map_err(|e| e.to_string())?;
+        let text = res2.text().await.map_err(|e| e.to_string())?;
+        return Ok(text);
+    }
+    let text = res.text().await.map_err(|e| e.to_string())?;
+    Ok(text)
+}
+
+#[tauri::command]
+fn logout(user: String, app_handle: AppHandle) -> Result<(), String> {
+    // clear stored keyring entry and cancel refresher if present
+    let service = app_handle.package_info().name.to_string();
+    if let Err(e) = app_handle.keyring().delete_password(&service, &user) {
+        eprintln!("failed to remove keyring entry: {}", e);
+    }
+    let state = app_handle.state::<AppState>();
+    if let Some(tx) = state.refresher_tx.lock().unwrap().take() {
+        let _ = tx.send(true);
+    }
+    Ok(())
 }
 
 async fn do_check_websites(
@@ -153,6 +261,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_keyring::init())
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -231,6 +340,7 @@ pub fn run() {
             app.manage(AppState {
                 websites: Mutex::new(initial_websites),
                 tray,
+                refresher_tx: Mutex::new(None),
             });
 
             // Spawn a background task to check websites every 60 seconds
@@ -247,6 +357,7 @@ pub fn run() {
                 }
             });
 
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -262,7 +373,7 @@ pub fn run() {
                 state.tray.set_menu(Some(menu)).unwrap();
             }
         })
-        .invoke_handler(tauri::generate_handler![login, greet, check_websites])
+        .invoke_handler(tauri::generate_handler![login, greet, check_websites, get_access_token, fetch_protected, logout])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
