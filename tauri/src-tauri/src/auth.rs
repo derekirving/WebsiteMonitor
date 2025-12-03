@@ -66,7 +66,7 @@ pub fn start_auth_server() -> (String, mpsc::Receiver<String>) {
                 .find(|(key, _)| key == "code")
                 .map(|(_, value)| value.into_owned())
             {
-                let html = "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>";
+                let html = "<html><head><title>Authentication successful!</title></head><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>";
                 let response = Response::from_string(html).with_header(
                     tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap(),
                 );
