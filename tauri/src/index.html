@@ -14,8 +14,15 @@
     <h1>Welcome to Tauri!</h1>
 
     <button id="loginBtn">Sign in with Microsoft</button>
+    <button id="logoutBtn" style="display:none; margin-left: 10px;">Sign out</button>
     <button id="apiBtn" style="display:none; margin-left: 10px;">Call API</button>
     <div id="status"></div>
+
+    <div id="user-info" style="margin-top:12px;">
+      User: <span id="username">anonymous</span>
+      &nbsp;|&nbsp;
+      Status: <span id="auth-status">not authenticated</span>
+    </div>
 
     <div class="row">
       <a href="https://tauri.app" target="_blank">

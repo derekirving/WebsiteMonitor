@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { login as loginHelper, fetchProtected, logout as logoutHelper, setCurrentUser, currentUser } from './helpers/auth';
+import { login as loginHelper, fetchProtected, logout as logoutHelper, setCurrentUser, currentUser, probeAccessToken } from './helpers/auth';
 
 let greetInputEl: HTMLInputElement | null;
 let greetMsgEl: HTMLElement | null;
@@ -18,6 +18,8 @@ const CONFIG = {
 let loginBtn: HTMLButtonElement = document.getElementById('loginBtn') as HTMLButtonElement;
 let logoutBtn: HTMLButtonElement | null = document.getElementById('logoutBtn') as HTMLButtonElement | null;
 let apiBtn: HTMLButtonElement | null = document.getElementById('apiBtn') as HTMLButtonElement | null;
+let usernameEl: HTMLElement | null = null;
+let authStatusEl: HTMLElement | null = null;
 //const apiBtn = document.getElementById('apiBtn');
 //const statusDiv = document.getElementById('status');
 
@@ -31,12 +33,15 @@ loginBtn.addEventListener('click', async () => {
         // For now assume Rust saved the token and you can derive the user from the token in Rust.
         // Store a placeholder or actual user if returned by `login`
         if (result && result.id_token) {
-            // Optionally send a command to get the user; here we just set currentUser to unknown
-            setCurrentUser('unknown');
+            // JS helper may have already set current user from id_token
         }
         showStatus('✅ Signed in successfully!', true);
         loginBtn.style.display = 'none';
         if (logoutBtn) logoutBtn.style.display = 'inline-block';
+        // update UI username/status
+        const u = currentUser();
+        if (usernameEl) usernameEl.textContent = u || 'anonymous';
+        if (authStatusEl) authStatusEl.textContent = 'authenticated';
     } catch (error) {
         showStatus('❌ Sign in failed: ' + error, false, true);
         loginBtn.disabled = false;
@@ -51,6 +56,8 @@ logoutBtn?.addEventListener('click', async () => {
         showStatus('Logged out', true);
         if (loginBtn) loginBtn.style.display = 'inline-block';
         if (logoutBtn) logoutBtn.style.display = 'none';
+        if (usernameEl) usernameEl.textContent = 'anonymous';
+        if (authStatusEl) authStatusEl.textContent = 'not authenticated';
     } catch (e) {
         console.error('logout failed', e);
     }
@@ -105,6 +112,30 @@ listen('website_check_complete', (event: any) => {
 window.addEventListener("DOMContentLoaded", () => {
     greetInputEl = document.querySelector("#greet-input");
     greetMsgEl = document.querySelector("#greet-msg");
+    usernameEl = document.querySelector('#username');
+    authStatusEl = document.querySelector('#auth-status');
+    // On startup, probe whether we have a user and valid token
+    (async () => {
+        const u = currentUser();
+        if (u) {
+            // try to probe access token; this will refresh if needed
+            const ok = await probeAccessToken(u, CONFIG.clientId, CONFIG.tenantId);
+            if (usernameEl) usernameEl.textContent = u;
+            if (authStatusEl) authStatusEl.textContent = ok ? 'authenticated' : 'needs login';
+            if (ok) {
+                if (loginBtn) loginBtn.style.display = 'none';
+                if (logoutBtn) logoutBtn.style.display = 'inline-block';
+            } else {
+                if (loginBtn) loginBtn.style.display = 'inline-block';
+                if (logoutBtn) logoutBtn.style.display = 'none';
+            }
+        } else {
+            if (usernameEl) usernameEl.textContent = 'anonymous';
+            if (authStatusEl) authStatusEl.textContent = 'not authenticated';
+            if (loginBtn) loginBtn.style.display = 'inline-block';
+            if (logoutBtn) logoutBtn.style.display = 'none';
+        }
+    })();
     document.querySelector("#greet-form")?.addEventListener("submit", (e) => {
         e.preventDefault();
         greet();

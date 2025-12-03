@@ -35,7 +35,7 @@ async fn login(
     client_id: String,
     tenant_id: String,
     app_handle: AppHandle
-) -> Result<auth::TokenResponse, String> {
+) -> Result<serde_json::Value, String> {
 
     println!("Logging in: {}", client_id);
     let (code_verifier, code_challenge) = auth::generate_pkce();
@@ -74,6 +74,8 @@ async fn login(
     let ah = app_handle.clone();
     let client_id_clone = client_id.clone();
     let tenant_id_clone = tenant_id.clone();
+    // clone user for the background refresher so we don't move the original `user`
+    let user_for_refresher = user.clone();
 
     // Create a watch channel to allow cancelling the refresher
     let (tx, mut rx) = watch::channel(false);
@@ -84,8 +86,9 @@ async fn login(
     async_runtime::spawn(async move {
         // initial attempt to compute sleep until expiry
         loop {
+            println!("Refresher running");
             // Try to load stored token and compute sleep until expiry
-            if let Ok(Some(stored)) = auth::load_token_from_keyring(&ah, &user) {
+            if let Ok(Some(stored)) = auth::load_token_from_keyring(&ah, &user_for_refresher) {
                 let expires_at = stored.issued_at + stored.token.expires_in;
                 let now = Utc::now().timestamp();
                 // sleep until 60 seconds before expiry, or at most 5 minutes
@@ -104,7 +107,7 @@ async fn login(
                         }
                     }
                     _ = sleep => {
-                        let _ = auth::ensure_valid_token(ah.clone(), &user, &client_id_clone, &tenant_id_clone, 60).await;
+                        let _ = auth::ensure_valid_token(ah.clone(), &user_for_refresher, &client_id_clone, &tenant_id_clone, 60).await;
                         // loop and recompute next sleep
                     }
                 }
@@ -121,7 +124,18 @@ async fn login(
         }
     });
 
-    Ok(token)
+    println!("Returning refresh token {}", token.access_token);
+    // Merge token fields and add a top-level `user` property so frontend can persist username
+    match serde_json::to_value(&token) {
+        Ok(mut v) => {
+            if let serde_json::Value::Object(ref mut map) = v {
+                map.insert("user".to_string(), serde_json::Value::String(user));
+                return Ok(serde_json::Value::Object(map.clone()));
+            }
+            Ok(v)
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[tauri::command]

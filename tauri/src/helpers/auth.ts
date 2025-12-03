@@ -12,11 +12,38 @@ export async function login(clientId: string, tenantId: string): Promise<any> {
   const token: any = await invoke('login', { clientId, tenantId });
   // token includes id_token etc. Extract user from id_token on Rust side or store returned user.
   // If your Rust `login` returns TokenResponse, adapt accordingly.
+  // If Rust returned an 'id_token' or 'user' field, persist a currentUser entry
   if (token && token.id_token) {
-    // optionally extract preferred_username in JS or rely on Rust to return user
-    // For simplicity assume Rust saved the token and we can derive user from token in Rust
+    // try to decode preferred_username from id_token payload in JS as a fallback
+    try {
+      const parts = token.id_token.split('.');
+      if (parts.length >= 2) {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+        const u = payload.preferred_username || payload.upn || payload.email;
+        if (u) {
+          setCurrentUser(u);
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  if (token && token.user) {
+    setCurrentUser(token.user);
   }
   return token;
+}
+
+export async function probeAccessToken(user: string | null, clientId: string, tenantId: string): Promise<boolean> {
+  if (!user) return false;
+  try {
+    // Try to get an access token; if succeed token is valid or refreshed
+    const access = await invoke('get_access_token', { user, clientId, tenantId });
+    return !!access;
+  } catch (e) {
+    return false;
+  }
 }
 
 export async function getAccessToken(user: string, clientId: string, tenantId: string): Promise<string> {
