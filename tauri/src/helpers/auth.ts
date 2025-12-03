@@ -50,11 +50,23 @@ export async function getAccessToken(user: string, clientId: string, tenantId: s
   return await invoke('get_access_token', { user, clientId, tenantId });
 }
 
+export async function whoami(clientId: string, tenantId: string): Promise<{ user: string; authenticated: boolean }> {
+  console.log('helpers.whoami: invoking whoami', { clientId, tenantId });
+  const res: any = await invoke('whoami', { clientId, tenantId });
+  console.log('helpers.whoami: got response', res);
+  return { user: res.user || '', authenticated: !!res.authenticated };
+}
+
 export async function fetchProtected(apiUrl: string, user: string, clientId: string, tenantId: string): Promise<string> {
   return await invoke('fetch_protected', { apiUrl, user, clientId, tenantId });
 }
 
 export async function logout(user: string): Promise<void> {
   await invoke('logout', { user });
+  try {
+    await invoke('clear_last_user', {});
+  } catch (e) {
+    // ignore if not available
+  }
   localStorage.removeItem('currentUser');
 }

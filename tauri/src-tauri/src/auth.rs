@@ -144,6 +144,11 @@ pub fn save_token_to_keyring(
     };
     let json = serde_json::to_string(&stored)?;
     app_handle.keyring().set_password(&service, user, &json)?;
+    // persist last_user entry for quick whoami lookup
+    let last_user_key = format!("{}::last_user", &service);
+    app_handle.keyring().set_password(&service, &last_user_key, user)?;
+    println!("save_token_to_keyring: service={}, user={}, last_user_key={}", service, user, last_user_key);
+    println!("save_token_to_keyring: stored json {}", json);
     Ok(())
 }
 
@@ -213,6 +218,9 @@ pub async fn refresh_access_token(
     app_handle
         .keyring()
         .set_password(&service, &user, &token_json)?;
+    // update last_user
+    let last_user_key = format!("{}::last_user", &service);
+    app_handle.keyring().set_password(&service, &last_user_key, &user)?;
 
     Ok(token_response)
 }

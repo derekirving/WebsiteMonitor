@@ -2,7 +2,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Mutex, Arc};
 use tokio::sync::watch;
 use tauri::{
     async_runtime,
@@ -70,12 +70,12 @@ async fn login(
     .map_err(|e| e.to_string())?;
 
     // After successful login persist token and start a background refresher
-    let user = auth::extract_user_from_id_token_or_os(&token).unwrap_or_else(|_| "unknown".to_string());
+    let user = Arc::new(auth::extract_user_from_id_token_or_os(&token).unwrap_or_else(|_| "unknown".to_string()));
     let ah = app_handle.clone();
     let client_id_clone = client_id.clone();
     let tenant_id_clone = tenant_id.clone();
-    // clone user for the background refresher so we don't move the original `user`
-    let user_for_refresher = user.clone();
+    // share user with background refresher using Arc (cheap clone of pointer)
+    let user_for_refresher = Arc::clone(&user);
 
     // Create a watch channel to allow cancelling the refresher
     let (tx, mut rx) = watch::channel(false);
@@ -88,7 +88,7 @@ async fn login(
         loop {
             println!("Refresher running");
             // Try to load stored token and compute sleep until expiry
-            if let Ok(Some(stored)) = auth::load_token_from_keyring(&ah, &user_for_refresher) {
+            if let Ok(Some(stored)) = auth::load_token_from_keyring(&ah, &*user_for_refresher) {
                 let expires_at = stored.issued_at + stored.token.expires_in;
                 let now = Utc::now().timestamp();
                 // sleep until 60 seconds before expiry, or at most 5 minutes
@@ -107,7 +107,7 @@ async fn login(
                         }
                     }
                     _ = sleep => {
-                        let _ = auth::ensure_valid_token(ah.clone(), &user_for_refresher, &client_id_clone, &tenant_id_clone, 60).await;
+                        let _ = auth::ensure_valid_token(ah.clone(), &*user_for_refresher, &client_id_clone, &tenant_id_clone, 60).await;
                         // loop and recompute next sleep
                     }
                 }
@@ -129,7 +129,7 @@ async fn login(
     match serde_json::to_value(&token) {
         Ok(mut v) => {
             if let serde_json::Value::Object(ref mut map) = v {
-                map.insert("user".to_string(), serde_json::Value::String(user));
+                map.insert("user".to_string(), serde_json::Value::String(user.as_ref().clone()));
                 return Ok(serde_json::Value::Object(map.clone()));
             }
             Ok(v)
@@ -147,6 +147,55 @@ async fn get_access_token(
 ) -> Result<String, String> {
     match auth::ensure_valid_token(app_handle.clone(), &user, &client_id, &tenant_id, 60).await {
         Ok(token_resp) => Ok(token_resp.access_token),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn whoami(
+    client_id: String,
+    tenant_id: String,
+    app_handle: AppHandle,
+) -> Result<serde_json::Value, String> {
+    // Read the last_user entry (persisted when saving tokens)
+    let service = app_handle.package_info().name.to_string();
+    let last_user_key = format!("{}::last_user", &service);
+    if let Ok(Some(last_user)) = app_handle.keyring().get_password(&service, &last_user_key) {
+        println!("whoami: found last_user key = {}", last_user);
+        // Try to ensure token is valid (attempt refresh immediately)
+        match auth::ensure_valid_token(app_handle.clone(), &last_user, &client_id, &tenant_id, 0).await {
+            Ok(_) => {
+                println!("whoami: ensure_valid_token succeeded for user {}", last_user);
+                return Ok(serde_json::json!({"user": last_user.clone(), "authenticated": true}));
+            }
+            Err(e) => {
+                println!("whoami: ensure_valid_token failed for user {}: {}", last_user, e);
+                // Refresh failed — fall back to checking stored token expiry directly
+                if let Ok(Some(stored)) = auth::load_token_from_keyring(&app_handle, &last_user) {
+                    let now = chrono::Utc::now().timestamp();
+                    let expires_at = stored.issued_at + stored.token.expires_in;
+                    println!("whoami: stored token for {} expires_at={}, now={}", last_user, expires_at, now);
+                    if now < expires_at {
+                        println!("whoami: stored token still valid for user {}", last_user);
+                        return Ok(serde_json::json!({"user": last_user.clone(), "authenticated": true}));
+                    }
+                } else {
+                    println!("whoami: no stored token found for user {}", last_user);
+                }
+                return Ok(serde_json::json!({"user": last_user.clone(), "authenticated": false}));
+            }
+        }
+    }
+
+    Ok(serde_json::json!({"user": "", "authenticated": false}))
+}
+
+#[tauri::command]
+fn clear_last_user(app_handle: AppHandle) -> Result<(), String> {
+    let service = app_handle.package_info().name.to_string();
+    let last_user_key = format!("{}::last_user", &service);
+    match app_handle.keyring().delete_password(&service, &last_user_key) {
+        Ok(()) => Ok(()),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -208,6 +257,16 @@ fn logout(user: String, app_handle: AppHandle) -> Result<(), String> {
     if let Err(e) = app_handle.keyring().delete_password(&service, &user) {
         eprintln!("failed to remove keyring entry: {}", e);
     }
+    // remove persisted last_user entry if it matches this user
+    let last_user_key = format!("{}::last_user", &service);
+    if let Ok(Some(last)) = app_handle.keyring().get_password(&service, &last_user_key) {
+        if last == user {
+            if let Err(e) = app_handle.keyring().delete_password(&service, &last_user_key) {
+                eprintln!("failed to remove last_user key: {}", e);
+            }
+        }
+    }
+    // no filesystem fallback to remove; keyring entry already deleted above
     let state = app_handle.state::<AppState>();
     if let Some(tx) = state.refresher_tx.lock().unwrap().take() {
         let _ = tx.send(true);
@@ -387,7 +446,7 @@ pub fn run() {
                 state.tray.set_menu(Some(menu)).unwrap();
             }
         })
-        .invoke_handler(tauri::generate_handler![login, greet, check_websites, get_access_token, fetch_protected, logout])
+        .invoke_handler(tauri::generate_handler![login, greet, check_websites, get_access_token, fetch_protected, logout, whoami, clear_last_user])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

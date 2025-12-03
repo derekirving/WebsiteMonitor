@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { login as loginHelper, fetchProtected, logout as logoutHelper, setCurrentUser, currentUser, probeAccessToken } from './helpers/auth';
+import { login as loginHelper, fetchProtected, logout as logoutHelper, setCurrentUser, currentUser, probeAccessToken, whoami } from './helpers/auth';
 
 let greetInputEl: HTMLInputElement | null;
 let greetMsgEl: HTMLElement | null;
@@ -42,6 +42,7 @@ loginBtn.addEventListener('click', async () => {
         const u = currentUser();
         if (usernameEl) usernameEl.textContent = u || 'anonymous';
         if (authStatusEl) authStatusEl.textContent = 'authenticated';
+        if (apiBtn) apiBtn.style.display = 'inline-block';
     } catch (error) {
         showStatus('❌ Sign in failed: ' + error, false, true);
         loginBtn.disabled = false;
@@ -114,26 +115,31 @@ window.addEventListener("DOMContentLoaded", () => {
     greetMsgEl = document.querySelector("#greet-msg");
     usernameEl = document.querySelector('#username');
     authStatusEl = document.querySelector('#auth-status');
-    // On startup, probe whether we have a user and valid token
+    // On startup, call whoami to get stored username and whether token is valid
     (async () => {
-        const u = currentUser();
-        if (u) {
-            // try to probe access token; this will refresh if needed
-            const ok = await probeAccessToken(u, CONFIG.clientId, CONFIG.tenantId);
-            if (usernameEl) usernameEl.textContent = u;
-            if (authStatusEl) authStatusEl.textContent = ok ? 'authenticated' : 'needs login';
-            if (ok) {
+        try {
+            console.log('startup: calling whoami');
+            const info = await whoami(CONFIG.clientId, CONFIG.tenantId);
+            console.log('startup: whoami returned', info);
+            const u = info.user || currentUser();
+            if (usernameEl) usernameEl.textContent = u || 'anonymous';
+            if (authStatusEl) authStatusEl.textContent = info.authenticated ? 'authenticated' : 'not authenticated';
+            if (info.authenticated) {
                 if (loginBtn) loginBtn.style.display = 'none';
                 if (logoutBtn) logoutBtn.style.display = 'inline-block';
+                if (apiBtn) apiBtn.style.display = 'inline-block';
             } else {
                 if (loginBtn) loginBtn.style.display = 'inline-block';
                 if (logoutBtn) logoutBtn.style.display = 'none';
+                if (apiBtn) apiBtn.style.display = 'none';
             }
-        } else {
+        } catch (e) {
+            console.error('startup: whoami failed', e);
             if (usernameEl) usernameEl.textContent = 'anonymous';
             if (authStatusEl) authStatusEl.textContent = 'not authenticated';
             if (loginBtn) loginBtn.style.display = 'inline-block';
             if (logoutBtn) logoutBtn.style.display = 'none';
+            if (apiBtn) apiBtn.style.display = 'none';
         }
     })();
     document.querySelector("#greet-form")?.addEventListener("submit", (e) => {
