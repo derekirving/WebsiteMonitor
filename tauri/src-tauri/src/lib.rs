@@ -178,7 +178,7 @@ async fn whoami(
     if let Ok(Some(last_user)) = app_handle.keyring().get_password(&service, &last_user_key) {
         println!("whoami: found last_user key = {}", last_user);
         // Try to ensure token is valid (attempt refresh immediately)
-        match auth::ensure_valid_token(app_handle.clone(), &last_user, &client_id, &tenant_id, 0).await {
+        match auth::ensure_valid_token(app_handle.clone(), &last_user, &client_id, &tenant_id, 60).await {
             Ok(_) => {
                 println!("whoami: ensure_valid_token succeeded for user {}", last_user);
                 return Ok(serde_json::json!({"user": last_user.clone(), "authenticated": true}));
@@ -257,7 +257,7 @@ async fn fetch_protected(
     let res = client.get(&api_url).bearer_auth(&access.access_token).send().await.map_err(|e| e.to_string())?;
     if res.status() == 401 {
         // force refresh and retry
-        let refreshed = auth::ensure_valid_token(app_handle.clone(), &user, &client_id, &tenant_id, 0).await.map_err(|e| e.to_string())?;
+        let refreshed = auth::ensure_valid_token(app_handle.clone(), &user, &client_id, &tenant_id, 60).await.map_err(|e| e.to_string())?;
         let res2 = client.get(&api_url).bearer_auth(&refreshed.access_token).send().await.map_err(|e| e.to_string())?;
         let text = res2.text().await.map_err(|e| e.to_string())?;
         return Ok(text);
@@ -345,8 +345,22 @@ async fn do_check_websites(
    Ok((websites, message))
 }
 
+#[tauri::command]
+fn get_env(name: &str) -> String {
+    std::env::var(String::from(name)).unwrap_or(String::from(""))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+
+    //  if cfg!(debug_assertions) {
+    //     dotenv::from_filename(".env.development").unwrap().load();
+    // }else{
+    //     dotenv::from_filename(".env.production").unwrap().load();
+    // }
+
+    dotenv::from_filename(".env").unwrap().load();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -462,7 +476,7 @@ pub fn run() {
                 state.tray.set_menu(Some(menu)).unwrap();
             }
         })
-        .invoke_handler(tauri::generate_handler![login, greet, check_websites, get_access_token, fetch_protected, logout, whoami, clear_last_user])
+        .invoke_handler(tauri::generate_handler![login, greet, check_websites, get_access_token, fetch_protected, logout, whoami, clear_last_user, get_env])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

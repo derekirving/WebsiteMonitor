@@ -6,21 +6,33 @@ let greetInputEl: HTMLInputElement | null;
 let greetMsgEl: HTMLElement | null;
 let checkElem: HTMLParagraphElement | null = document.querySelector('#checkResult');
 
-// Your Azure AD configuration
+const getEnv = async (name:string) => {
+     try{
+      return await invoke("get_env", { name })
+    }catch(err){
+      console.error('getFromRust', err);
+    }
+
+    return ""
+}
+
+// Azure AD configuration
 const CONFIG = {
-    clientId: '0f991812-74e3-4964-a9b2-5f8ab0629d26',
-    tenantId: '631e0763-1533-47eb-a5cd-0457bee5944e',
-    apiBaseUrl: 'https://your-api.azurewebsites.net/api'
+    clientId: await getEnv('CLIENT_ID') as string,
+    tenantId: await getEnv('TENANT_ID') as string,
+    apiBaseUrl: await getEnv('API_BASE_URL') as string
 };
+
+console.log("Env", CONFIG);
 
 // accessToken is stored in Rust keyring; frontend uses getAccessToken/fetchProtected
 
 let loginBtn: HTMLButtonElement = document.getElementById('loginBtn') as HTMLButtonElement;
 let logoutBtn: HTMLButtonElement | null = document.getElementById('logoutBtn') as HTMLButtonElement | null;
 let apiBtn: HTMLButtonElement | null = document.getElementById('apiBtn') as HTMLButtonElement | null;
-let usernameEl: HTMLElement | null = null;
-let authStatusEl: HTMLElement | null = null;
-let avatarEl: HTMLImageElement | null = null;
+let usernameEl: HTMLElement | null = document.getElementById('username') as HTMLSpanElement | null;
+let authStatusEl: HTMLElement | null = document.getElementById('auth-status') as HTMLSpanElement | null;
+let avatarEl: HTMLImageElement | null = document.getElementById('avatar') as HTMLImageElement | null;
 //const apiBtn = document.getElementById('apiBtn');
 //const statusDiv = document.getElementById('status');
 
