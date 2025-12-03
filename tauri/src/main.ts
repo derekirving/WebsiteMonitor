@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { login as loginHelper, fetchProtected, logout as logoutHelper, setCurrentUser, currentUser, probeAccessToken, whoami } from './helpers/auth';
+import { login as loginHelper, fetchProtected, logout as logoutHelper, currentUser, whoami } from './helpers/auth';
 
 let greetInputEl: HTMLInputElement | null;
 let greetMsgEl: HTMLElement | null;
@@ -20,6 +20,7 @@ let logoutBtn: HTMLButtonElement | null = document.getElementById('logoutBtn') a
 let apiBtn: HTMLButtonElement | null = document.getElementById('apiBtn') as HTMLButtonElement | null;
 let usernameEl: HTMLElement | null = null;
 let authStatusEl: HTMLElement | null = null;
+let avatarEl: HTMLImageElement | null = null;
 //const apiBtn = document.getElementById('apiBtn');
 //const statusDiv = document.getElementById('status');
 
@@ -43,6 +44,22 @@ loginBtn.addEventListener('click', async () => {
         if (usernameEl) usernameEl.textContent = u || 'anonymous';
         if (authStatusEl) authStatusEl.textContent = 'authenticated';
         if (apiBtn) apiBtn.style.display = 'inline-block';
+        // fetch avatar and show it if present
+
+        if(result.photo && avatarEl)
+        {
+            avatarEl.src = result.photo;
+            avatarEl.style.display = 'inline-block';
+        }
+        // try {
+        //     const photo: any = await invoke('get_user_photo', { user: u });
+        //     if (photo && avatarEl) {
+        //         avatarEl.src = `data:${photo.content_type};base64,${photo.data_base64}`;
+        //         avatarEl.style.display = 'inline-block';
+        //     }
+        // } catch (e) {
+        //     console.warn('get_user_photo failed', e);
+        // }
     } catch (error) {
         showStatus('❌ Sign in failed: ' + error, false, true);
         loginBtn.disabled = false;
@@ -128,6 +145,16 @@ window.addEventListener("DOMContentLoaded", () => {
                 if (loginBtn) loginBtn.style.display = 'none';
                 if (logoutBtn) logoutBtn.style.display = 'inline-block';
                 if (apiBtn) apiBtn.style.display = 'inline-block';
+                // fetch avatar for existing authenticated session
+                try {
+                    const photo: any = await invoke('get_user_photo', { user: info.user });
+                    if (photo && avatarEl) {
+                        avatarEl.src = `data:${photo.content_type};base64,${photo.data_base64}`;
+                        avatarEl.style.display = 'inline-block';
+                    }
+                } catch (e) {
+                    console.warn('get_user_photo startup failed', e);
+                }
             } else {
                 if (loginBtn) loginBtn.style.display = 'inline-block';
                 if (logoutBtn) logoutBtn.style.display = 'none';
@@ -151,4 +178,5 @@ window.addEventListener("DOMContentLoaded", () => {
         e.preventDefault();
         checkWebsites();
     });
+    avatarEl = document.querySelector('#avatar');
 });

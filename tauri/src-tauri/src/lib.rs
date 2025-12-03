@@ -69,6 +69,16 @@ async fn login(
     .await
     .map_err(|e| e.to_string())?;
 
+    // Attempt to fetch user's profile photo (best-effort)
+    let photo_data_url = match auth::fetch_user_photo(&token.access_token).await {
+        Ok(Some(url)) => Some(url),
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("Failed to fetch user photo: {}", e);
+            None
+        }
+    };
+
     // After successful login persist token and start a background refresher
     let user = Arc::new(auth::extract_user_from_id_token_or_os(&token).unwrap_or_else(|_| "unknown".to_string()));
     let ah = app_handle.clone();
@@ -130,6 +140,11 @@ async fn login(
         Ok(mut v) => {
             if let serde_json::Value::Object(ref mut map) = v {
                 map.insert("user".to_string(), serde_json::Value::String(user.as_ref().clone()));
+                // insert photo if available
+                match photo_data_url {
+                    Some(ref d) => { map.insert("photo".to_string(), serde_json::Value::String(d.clone())); },
+                    None => { map.insert("photo".to_string(), serde_json::Value::Null); }
+                }
                 return Ok(serde_json::Value::Object(map.clone()));
             }
             Ok(v)
@@ -189,6 +204,7 @@ async fn whoami(
 
     Ok(serde_json::json!({"user": "", "authenticated": false}))
 }
+
 
 #[tauri::command]
 fn clear_last_user(app_handle: AppHandle) -> Result<(), String> {

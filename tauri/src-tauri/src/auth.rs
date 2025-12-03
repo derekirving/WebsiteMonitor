@@ -120,6 +120,9 @@ pub async fn exchange_code_for_token(
         eprintln!("Warning: failed to save token to keyring: {}", e);
     }
 
+    // Try to fetch user photo (best-effort). This does not change success of login.
+    let _ = fetch_user_photo(&token_response.access_token).await;
+
     // if let Ok(Some(saved)) = app_handle
     //     .keyring()
     //     .get_password("tauri-plugin-keyring", &user)
@@ -249,4 +252,34 @@ pub fn extract_user_from_id_token_or_os(
     Ok(std::env::var("USERNAME")
         .or_else(|_| std::env::var("USER"))
         .unwrap_or_else(|_| "unknown".into()))
+}
+
+pub async fn fetch_user_photo(
+    access_token: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get("https://graph.microsoft.com/v1.0/me/photo/$value")
+        .bearer_auth(access_token)
+        .send()
+        .await
+
+        ?;
+
+    if res.status() == reqwest::StatusCode::OK {
+        let content_type = res
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "image/jpeg".to_string());
+
+        let bytes = res.bytes().await?;
+        let b64 = general_purpose::STANDARD.encode(&bytes);
+        let data_url = format!("data:{};base64,{}", content_type, b64);
+        return Ok(Some(data_url));
+    }
+
+    // If photo not found (404) or other non-success, treat as None (best-effort)
+    Ok(None)
 }
